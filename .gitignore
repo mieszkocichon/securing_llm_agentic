@@ -1,0 +1,33 @@
+# Generated files
+*.pdf
+MEASUREMENTS.txt
+O_CO_CHODZI.md
+
+# Node/TypeScript
+node_modules/
+dist/
+*.js.map
+*.d.ts.map
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Build artifacts
+build/
+coverage/
+
+# Claude Code
+.claude/
