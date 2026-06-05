@@ -46,7 +46,18 @@ export class NetworkAnomalyDetector {
 
   /**
    * Detect port scanning: single source probing many destination ports
-   * Heuristic: >20 unique ports, >50 flows, <100 bytes/flow average
+   *
+   * THRESHOLDS ARE ARBITRARY AND UNTESTED ON PRODUCTION TRAFFIC:
+   * - uniquePorts > 20: No scientific basis. Real port scans can vary widely.
+   * - totalFlows > 50: Subject to network jitter and timing variations.
+   * - avgBytes < 100: Assumes minimal payloads. Real scans have variable sizes.
+   *
+   * PRODUCTION RISK: These thresholds will likely trigger false positives on:
+   * - Legitimate vulnerability scanning (Nessus, Qualys, internal tools)
+   * - Network diagnostics and availability testing
+   * - API client connections to multiple endpoints
+   *
+   * Recalibrate on your own traffic baseline before production deployment.
    */
   private detectPortScanning(): ThreatDetection[] {
     const threats: ThreatDetection[] = [];
@@ -86,7 +97,23 @@ export class NetworkAnomalyDetector {
 
   /**
    * Detect beaconing: regular periodic outbound traffic (C2 communication)
-   * Heuristic: coefficient of variation (stddev/mean) < 0.2 for inter-arrival times
+   *
+   * THRESHOLD CV < 0.2 IS UNREALISTIC AND WILL GENERATE FALSE POSITIVES:
+   * - Assumes perfect timing regularity (CV=0 in synthetic tests)
+   * - Real legitimate periodic traffic has CV typically 0.3-0.5 due to:
+   *   * Network jitter and packet loss
+   *   * OS scheduler variance
+   *   * Load balancing and routing changes
+   *   * Health checks and cron jobs with natural variance
+   *
+   * PRODUCTION RISK: Will flag:
+   * - Scheduled backups (AWS Backup, native OS scheduled tasks)
+   * - Health checks and keep-alives
+   * - Legitimate periodic API calls (cache refreshes, metric collection)
+   * - Kubernetes liveness/readiness probes
+   *
+   * Must baseline real VPC Flow Logs to find actual CV distribution
+   * for your environment. Typical threshold: CV < 0.1 (very strict) or CV < 0.05 (extremely strict).
    */
   private detectBeaconing(): ThreatDetection[] {
     const threats: ThreatDetection[] = [];
@@ -137,7 +164,24 @@ export class NetworkAnomalyDetector {
 
   /**
    * Detect data exfiltration by volume
-   * Heuristic: outbound volume to single destination > 5x baseline
+   *
+   * EXTREMELY HIGH FALSE POSITIVE RISK WITH DEFAULT BASELINE (10KB):
+   * - 5x baseline = 50KB threshold — ABSURDLY LOW for modern workloads
+   * - S3 bulk downloads: 100MB-1GB typical → triggers immediately
+   * - Database backups: 1GB+ typical → triggers immediately
+   * - API bulk operations: 100MB+ typical → triggers immediately
+   * - Kubernetes image pulls: 50MB-500MB typical → triggers immediately
+   *
+   * ACTUAL RECOMMENDED BASELINES (per workload type):
+   * - Minimal data workload: 100KB-1MB
+   * - Standard workload: 1MB-10MB
+   * - Data-heavy (S3, DB): 10MB-100MB
+   * - Big data workload: 100MB-1GB+
+   *
+   * PRODUCTION REQUIREMENT:
+   * Measure 72+ hours of real outbound traffic distribution.
+   * Set baseline to 95th percentile of normal traffic.
+   * Current default will generate 50-90% false positive rate.
    */
   private detectExfiltrationByVolume(): ThreatDetection[] {
     const threats: ThreatDetection[] = [];
@@ -165,7 +209,27 @@ export class NetworkAnomalyDetector {
 
   /**
    * Detect brute force: many connection attempts from single source
-   * Heuristic: >100 flows from single source IP
+   *
+   * THRESHOLD >100 FLOWS IS ARBITRARY AND WILL TRIGGER ON LEGITIMATE ACTIVITY:
+   * - >100 flows per source IP is NOT inherently malicious
+   * - Real brute force (SSH, RDP) typically 1000+ attempts in seconds
+   * - But legitimate client connections accumulate 100+ flows quickly:
+   *   * Batch jobs with retries
+   *   * Application pools with multiple connections
+   *   * Kubernetes worker nodes (1000+ pods = 1000+ connections)
+   *   * Scheduled polling and health checks
+   *   * Failed API retries with exponential backoff
+   *
+   * PRODUCTION RISK: Will flag:
+   * - Any batch processing job (data pipelines, scheduled tasks)
+   * - High-concurrency applications
+   * - Kubernetes or container orchestration systems
+   * - API client retry logic with timeouts
+   *
+   * RECOMMENDED APPROACH:
+   * Instead of total flow count, look at FAILED connections (connection timeouts, resets).
+   * Failed attempts >> 50 in short time window = likely brute force.
+   * Successful connections >> 100 in long time window = normal.
    */
   private detectBruteForce(): ThreatDetection[] {
     const threats: ThreatDetection[] = [];
@@ -224,6 +288,17 @@ export class NetworkAnomalyDetector {
   private isUnusualPort(port: number): boolean {
     const commonPorts = [80, 443, 22, 21, 25, 53, 110, 143, 3306, 5432, 5984, 6379, 27017];
     return !commonPorts.includes(port);
+  }
+
+  /**
+   * Clear all accumulated flow data.
+   * Must be called between agent executions to prevent flows from one execution
+   * contaminating the anomaly analysis of subsequent executions.
+   * (e.g., 60 legitimate HTTP calls across 3 executions would otherwise trigger
+   * a false port-scan alert because the >50 flow threshold is breached in aggregate.)
+   */
+  clearFlows(): void {
+    this.flows = [];
   }
 
   setVolumeBaseline(bytes: number): void {

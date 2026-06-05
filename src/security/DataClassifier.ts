@@ -74,7 +74,9 @@ export class DataClassifier {
       });
     }
 
-    if (this.patterns.creditCardCVV.test(text)) {
+    // NOTE: using text.match() instead of this.patterns.creditCardCVV.test(text)
+    // to avoid the stateful lastIndex bug on global (/g) regex instances.
+    if (text.match(this.patterns.creditCardCVV)) {
       detectedTypes.push('cvv');
       confidenceScores.push(0.9);
     }
@@ -87,14 +89,12 @@ export class DataClassifier {
     const ibanMatches = text.match(this.patterns.iban);
     if (ibanMatches) {
       ibanMatches.forEach((ibanCode) => {
+        // Only flag as IBAN if MOD97 checksum validates
         if (validateMOD97(ibanCode)) {
           detectedTypes.push('iban');
           confidenceScores.push(0.99);
-        } else {
-          // Still flag as potential IBAN even if validation fails
-          detectedTypes.push('iban');
-          confidenceScores.push(0.7);
         }
+        // If validation fails, do not flag (avoid false positives on random IBAN-like strings)
       });
     }
 
@@ -104,22 +104,26 @@ export class DataClassifier {
     }
 
     // Credentials
-    if (this.patterns.apiKey.test(text)) {
+    // NOTE: using text.match() throughout (instead of regex.test()) to avoid the
+    // stateful lastIndex bug: RegExp instances with /g flag maintain lastIndex between
+    // calls, causing subsequent .test() invocations on different strings to start
+    // searching from a non-zero offset and potentially miss matches.
+    if (text.match(this.patterns.apiKey)) {
       detectedTypes.push('api_key');
       confidenceScores.push(0.9);
     }
 
-    if (this.patterns.password.test(text)) {
+    if (text.match(this.patterns.password)) {
       detectedTypes.push('password');
       confidenceScores.push(0.92);
     }
 
-    if (this.patterns.privateKey.test(text)) {
+    if (text.match(this.patterns.privateKey)) {
       detectedTypes.push('private_key');
       confidenceScores.push(0.99);
     }
 
-    if (this.patterns.databaseUrl.test(text)) {
+    if (text.match(this.patterns.databaseUrl)) {
       detectedTypes.push('database_url');
       confidenceScores.push(0.96);
     }

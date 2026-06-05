@@ -74,10 +74,13 @@ export function calculateSensitivityLabel(types: string[]): SensitivityLabel {
 
   const highTypes = new Set([
     'credit_card',
+    'cvv',           // card verification value — financial credential
     'iban',
+    'iban_formatted', // formatted IBAN is equally sensitive
     'bank_account',
     'database_url',
-    'password'
+    'password',
+    'api_key'        // API keys are credentials; must block exfiltration
   ]);
 
   const mediumTypes = new Set([

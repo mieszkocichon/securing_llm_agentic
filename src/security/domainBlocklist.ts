@@ -3,7 +3,11 @@
  *
  * This represents what would be fed by AbuseIPDB or similar threat intelligence.
  * In production, this would be dynamically updated from various feeds.
- * Here we include ~100 known domains associated with malware, phishing, and data exfiltration.
+ * Here we include 91 known domains associated with malware, phishing, and data exfiltration.
+ * Note: several entries use fabricated TLDs (.dark, .panel, .malicious, .fake) that do not
+ * exist in the public DNS — they serve as illustrative placeholders only and would never
+ * match real traffic. A production deployment would replace this static list with a
+ * dynamically updated feed from AbuseIPDB, Spamhaus, or similar threat-intel providers.
  */
 
 export interface DomainThreat {

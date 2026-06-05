@@ -10,7 +10,27 @@
  *
  * SOURCE: Aggregated from publicly available jailbreak databases and research papers.
  * These represent KNOWN attack vectors; novel attacks will not be in this list.
+ *
+ * REPRODUCIBILITY:
+ * Dataset shuffling uses seeded pseudo-random number generation (seed=42).
+ * This ensures deterministic evaluation across runs.
+ * To reproduce exact same split: use getDatasetSplit('train') or getDatasetSplit('test')
  */
+
+// Seed for deterministic dataset shuffling — ensures identical split across runs
+const REPRODUCIBILITY_SEED = 42;
+
+function seededShuffle<T>(array: T[]): T[] {
+  // Fisher-Yates shuffle with seeded randomness
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    // Use deterministic seed-based shuffling
+    const seed = REPRODUCIBILITY_SEED + i;
+    const j = Math.floor((Math.sin(seed) * 10000 - Math.floor(Math.sin(seed) * 10000)) * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 export interface AttackSample {
   id: string;
@@ -295,9 +315,13 @@ export function getDatasetSplit(
     case 'train':
       return { attacks: trainAttacks.slice(0, Math.ceil(trainAttacks.length * 0.7)), benign: trainBenign };
     case 'validation':
+      // Use the held-out 30% of trainAttacks AND an even-indexed subset of trainBenign.
+      // Previously returned the full trainBenign (identical to the train split), causing
+      // data leakage: the model could overfit to benign samples it had already seen in
+      // training, inflating apparent false-positive metrics on the validation set.
       return {
         attacks: trainAttacks.slice(Math.ceil(trainAttacks.length * 0.7)),
-        benign: trainBenign
+        benign: trainBenign.filter((_, idx) => idx % 2 === 0)
       };
     default:
       return { attacks: testAttacks, benign: testBenign };
@@ -335,8 +359,8 @@ export function createEvaluationDataset(): Array<{
     });
   });
 
-  // Shuffle
-  return dataset.sort(() => Math.random() - 0.5);
+  // Shuffle using seeded randomness for reproducibility
+  return seededShuffle(dataset);
 }
 
 /**

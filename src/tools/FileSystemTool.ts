@@ -22,8 +22,16 @@ export class FileSystemTool implements Tool {
     const resolved = path.resolve(this.sandboxDir, filePath);
     const normalized = path.normalize(resolved);
 
-    // Security check: ensure path is within sandbox
-    if (!normalized.startsWith(path.normalize(this.sandboxDir))) {
+    // Security check: ensure path is within sandbox.
+    //
+    // IMPORTANT: always append path.sep when using startsWith() for directory checks.
+    // Without the separator, a sandbox at './sandbox' (normalized to 'sandbox') would
+    // also accept './sandboxEvil/secret.txt' because 'sandboxEvil/...'.startsWith('sandbox')
+    // is true — a classic CWE-22 path traversal bypass.
+    //
+    // We allow the path to equal the sandbox root itself (e.g. 'list' action on root).
+    const sandboxNormalized = path.normalize(path.resolve(this.sandboxDir));
+    if (normalized !== sandboxNormalized && !normalized.startsWith(sandboxNormalized + path.sep)) {
       throw new Error(`Access denied: Path ${filePath} is outside sandbox`);
     }
 

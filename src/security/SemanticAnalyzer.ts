@@ -4,8 +4,8 @@
  * This layer implements deterministic semantic threat scoring without neural inference.
  * Detection approach:
  * 1. Extract tokens from input
- * 2. Compare against 13 known attack pattern families (role-play, system prompt escapes, etc.)
- * 3. Calculate Jaccard similarity to determine semantic alignment with attack patterns
+ * 2. Compare against 14 known attack pattern families (role-play, system prompt escapes, few-shot attacks, etc.)
+ * 3. Check keyword containment to determine alignment with known attack vocabulary
  * 4. Adjust score based on benign phrase similarity and entropy
  *
  * Design rationale: Transparency over flexibility. Pattern-based detection is auditable,
@@ -99,9 +99,14 @@ export class SemanticAnalyzer {
       },
 
       // Prompt injection markers
+      // NOTE: patterns here MUST survive the tokenizer (replace(/[^a-z0-9_]/g,'')) and
+      // remain distinctive. '[SYSTEM]' strips to 'system' which matches normal text like
+      // "configure the system". Instead we use:
+      //   • 'im_start' / 'im_end'  — from <|im_start|> / <|im_end|> (tokenizer keeps '_')
+      //   • multi-word patterns that require adjacent injection-context words
       {
         id: 'marker_1',
-        pattern: ['[SYSTEM]', '[INST]', '[USER]', '[ASSISTANT]'],
+        pattern: ['im_start', 'im_end', 'system override', 'system new instructions', 'new system message'],
         threat_type: 'parser_confusion',
         severity: 'high'
       },
@@ -174,8 +179,11 @@ export class SemanticAnalyzer {
   }
 
   /**
-   * Calculate semantic threat score using n-gram similarity
+   * Calculate semantic threat score using keyword containment detection
    * Returns 0-1 where > 0.5 indicates likely threat
+   * Detection approach: checks whether input contains phrases from known attack pattern vocabulary.
+   * Scores are hardcoded confidence values (0.9 for single-token match, 0.95 for multi-word phrase match).
+   * NOTE: this is NOT Jaccard/n-gram similarity — it is keyword containment.
    */
   scoreForSemanticThreat(input: string): number {
     if (!input || input.trim().length === 0) {
@@ -217,8 +225,18 @@ export class SemanticAnalyzer {
       threatScore = maxPatternScore * (0.7 + patternMultiplier * 0.3);
     }
 
-    // Reduce score if it looks like benign text
-    if (benignSimilarity > 0.6) {
+    // Reduce score if it looks like benign text.
+    // Threshold is 0.95 (multi-word match), NOT 0.6 (single-token match).
+    //
+    // calculatePatternSimilarity() returns:
+    //   0.95  — a multi-word benign phrase appears verbatim in the input (genuine benign signal)
+    //   0.90  — a single token from a benign phrase appears in the input (too loose; common
+    //           words like "this", "how", "work" fire this on attack inputs, halving the threat
+    //           score and causing false negatives)
+    //
+    // By requiring benignSimilarity >= 0.95 we only suppress when a full multi-word benign
+    // phrase matches, eliminating the false-negative path through common-word coincidence.
+    if (benignSimilarity >= 0.95) {
       threatScore *= 0.5;
     }
 
@@ -244,6 +262,8 @@ export class SemanticAnalyzer {
 
   /**
    * Extract n-grams from token list
+   * NOTE: currently unused — reserved for future Jaccard-based similarity upgrade
+   * if a true set-overlap similarity measure is needed in place of keyword containment.
    */
   private extractNGrams(tokens: string[], n: number): Set<string> {
     const ngrams = new Set<string>();
@@ -255,7 +275,9 @@ export class SemanticAnalyzer {
 
   /**
    * Calculate similarity between input tokens and pattern
-   * Uses Jaccard similarity on token overlap
+   * Uses keyword containment: returns 0.95 if a multi-word phrase appears as a
+   * contiguous token sequence, 0.9 if a single-word token matches exactly, 0 otherwise.
+   * NOTE: this is NOT Jaccard similarity — no set-overlap coefficient is computed.
    */
   private calculatePatternSimilarity(inputTokens: string[], patternTokens: (string | string[])[]): number {
     // Check if pattern phrases appear in input (as substring sequences or individual tokens)

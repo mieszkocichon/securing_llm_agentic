@@ -50,12 +50,12 @@ export class PromptInjectionDetector {
       });
     }
 
-    // Check for semantic anomalies (Layer 5: LLM-as-a-judge / Embeddings)
+    // Check for semantic anomalies (Layer 5: Pattern-Based Semantic Analysis)
     if (this.failsSemanticAnalysis(userInput)) {
       threats.push({
         type: 'prompt_injection',
         severity: 'high',
-        message: 'Input failed semantic analysis (LLM-as-a-judge detected malicious intent)',
+        message: 'Input failed semantic analysis (pattern-based semantic detection identified malicious intent)',
         evidence: userInput.substring(0, 150),
         timestamp: new Date()
       });
@@ -116,6 +116,10 @@ export class PromptInjectionDetector {
     }
 
     // High entropy threshold (normal text is ~4.5, random text is ~6+)
+    // NOTE: 6.0 is a HEURISTIC GUESS, not empirically optimized
+    // Real-world performance depends on your specific benign traffic distribution
+    // Production MUST recalibrate on your own data: check entropy distribution
+    // of legitimate traffic and set threshold at 95th percentile + 1.0
     return entropy > 6;
   }
 
@@ -138,14 +142,16 @@ export class PromptInjectionDetector {
   }
 
   private failsSemanticAnalysis(input: string): boolean {
-    // Layer 5: Semantic Analysis using mock LLM-as-a-judge
+    // Layer 5: Pattern-Based Semantic Analysis (deterministic, no LLM involved)
     // Scores input using SemanticAnalyzer which:
-    // 1. Checks against known jailbreak patterns from JailbreakBench
-    // 2. Calculates similarity via n-gram matching
+    // 1. Checks against 14 known jailbreak pattern families from JailbreakBench
+    // 2. Detects keyword containment across attack pattern vocabulary
     // 3. Returns score in [0, 1] where > 0.5 = threat detected
     const semanticScore = this.semanticAnalyzer.scoreForSemanticThreat(input);
 
-    // Threshold set to 0.5 per paper (empirically determined on validation set)
+    // Threshold 0.5 is PLACEHOLDER - NOT empirically optimized
+    // This is a guess based on semantic score normalization [0, 1]
+    // Production must recalibrate on real attack patterns and benign samples
     return semanticScore > 0.5;
   }
 

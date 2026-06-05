@@ -185,15 +185,24 @@ export class ExfiltrationMonitor {
   }
 
   /**
-   * Check if hostname is an IP address
+   * Check if hostname is a valid IPv4 address
+   * Validates that each octet is 0-255 (not 999.999.999.999)
    */
   private isIPAddress(hostname: string): boolean {
-    return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname);
+    const ipRegex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+    const match = hostname.match(ipRegex);
+    if (!match) return false;
+    // Verify each octet is 0-255
+    return Array.from({ length: 4 }, (_, i) => {
+      const octet = parseInt(match[i + 1], 10);
+      return octet >= 0 && octet <= 255;
+    }).every(Boolean);
   }
 
   checkVolumeAnomaly(bytesTransferred: number): boolean {
     // Detect if transfer volume is abnormally high
-    return bytesTransferred > this.baselineVolume * 10;
+    // CONSISTENCY: matches monitorHTTP() threshold of 5x baseline (line 60)
+    return bytesTransferred > this.baselineVolume * 5;
   }
 
   setBaseline(bytes: number): void {

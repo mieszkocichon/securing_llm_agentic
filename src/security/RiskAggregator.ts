@@ -1,14 +1,18 @@
 /**
- * RiskAggregator - Multi-layer Bayesian risk fusion
+ * RiskAggregator - Multi-layer probabilistic risk fusion
  *
  * Implements the risk aggregation formula from the paper:
- * R = 1 - (1 - r_A)(1 - r_I)
+ * R = 1 - (1 - r_A)(1 - d·r_I)
  *
  * where:
- * - r_A = application-layer risk (max of all 5 detection layers)
- * - r_I = infrastructure-layer risk (network anomaly score)
+ * - r_A  = application-layer risk (max severity across all 5 detection layers)
+ * - r_I  = raw infrastructure-layer risk (network anomaly score)
+ * - d    = 0.8 confidence discount applied to infrastructure signals
+ *          (reflects lower reliability of network-level heuristics vs. application analysis)
  *
- * This combines independent evidence sources to produce a final risk score.
+ * NOTE: this is a product-of-complements evidence-fusion formula, NOT a Bayesian update.
+ * It does not compute a posterior probability; it propagates independent risk observations
+ * such that a partial signal from one layer still raises the overall score.
  */
 
 import { RiskScore, ThreatDetection } from '../types';
@@ -23,10 +27,12 @@ export class RiskAggregator {
    * Aggregate threats from application and infrastructure layers
    * Returns overall risk score and recommendation (ALLOW | REVIEW | BLOCK)
    *
-   * Formula: R = 1 - (1 - r_A)(1 - r_I)
+   * Formula: R = 1 - (1 - r_A)(1 - r_I')
    * where r_A = max severity from application layer
-   *       r_I = max severity from infrastructure layer
+   *       r_I' = max severity from infrastructure layer * 0.8 (discount factor)
    *
+   * The discount factor d=0.8 is applied to r_I within calculateInfrastructureScore()
+   * to reflect lower confidence in network-based heuristics vs. application-layer analysis.
    * This ensures partial signals from one layer propagate meaningfully
    * even if the other layer detects nothing.
    */
@@ -106,8 +112,17 @@ export class RiskAggregator {
   }
 
   /**
-   * Calculate infrastructure-layer risk from network anomalies
-   * Only network_anomaly type threats contribute to this layer
+   * Calculate infrastructure-layer risk from ALL network threats
+   *
+   * Processes every threat passed in `threats` without type filtering.
+   * Callers (AgentExecutor) are responsible for passing only infrastructure-layer
+   * threats (i.e., those emitted by NetworkAnomalyDetector).
+   *
+   * WHY NO TYPE FILTER: detectExfiltrationByVolume() in NetworkAnomalyDetector emits
+   * threats with type='data_exfiltration' (not 'network_anomaly'). A type filter on
+   * 'network_anomaly' would silently drop those signals — high-volume exfiltration
+   * detections would have zero effect on the risk score. All infrastructure threats
+   * (regardless of their specific type) should contribute to r_I.
    *
    * Note: Network-level detection is behavioral and heuristic-based.
    * Legitimate high-volume operations (bulk downloads, API bursts) may trigger
@@ -115,15 +130,13 @@ export class RiskAggregator {
    * compared to application-layer semantic analysis.
    */
   private calculateInfrastructureScore(threats: ThreatDetection[]): number {
-    const networkThreats = threats.filter((t) => t.type === 'network_anomaly');
-
-    if (networkThreats.length === 0) {
+    if (threats.length === 0) {
       return 0;
     }
 
     let maxScore = 0;
 
-    for (const threat of networkThreats) {
+    for (const threat of threats) {
       let score = 0;
 
       switch (threat.severity) {
@@ -201,7 +214,9 @@ export class RiskAggregator {
       explanation += '(No anomalies detected)\n';
     }
 
-    explanation += `\nFormula: R = 1 - (1 - ${riskScore.applicationScore})(1 - ${riskScore.infrastructureScore}) = ${riskScore.overallScore}`;
+    // infrastructureScore already incorporates the d=0.8 discount (applied in calculateInfrastructureScore)
+    explanation += `\nFormula: R = 1 - (1 - r_A)(1 - d·r_I)  [d=0.8 applied to infrastructure]`;
+    explanation += `\n         R = 1 - (1 - ${riskScore.applicationScore})(1 - ${riskScore.infrastructureScore}) = ${riskScore.overallScore}`;
 
     return explanation;
   }

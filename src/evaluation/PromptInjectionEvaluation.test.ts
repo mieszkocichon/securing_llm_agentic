@@ -161,10 +161,18 @@ describe('PromptInjectionDetector - Empirical Evaluation', () => {
         const highSeverityThreats = threats.filter((t) => t.severity === 'high' || t.severity === 'medium');
         const predicted = highSeverityThreats.length > 0;
 
+        // Real confidence score: normalize severity to [0, 1]
+        // high = 0.9, medium = 0.6, low = 0.2, none = 0.0
+        let score = 0.0;
+        if (threats.length > 0) {
+          const maxSeverity = threats[0].severity;
+          score = maxSeverity === 'high' ? 0.9 : maxSeverity === 'medium' ? 0.6 : 0.2;
+        }
+
         return {
           predicted,
           actual: sample.isThreat,
-          score: highSeverityThreats.length > 0 ? 0.8 : 0.2 // Mock confidence score
+          score
         };
       });
 
@@ -174,10 +182,11 @@ describe('PromptInjectionDetector - Empirical Evaluation', () => {
 
       console.log('\n' + EvaluationMetrics.formatResults(metrics));
 
-      // Assertions
-      expect(metrics.tpr).toBeGreaterThan(0.5); // At least 50% detection rate
-      expect(metrics.fpr).toBeLessThan(0.3); // Less than 30% false positive rate
-      expect(metrics.f1Score).toBeGreaterThan(0.4); // Reasonable F1 score
+      // Assertions: These thresholds represent MINIMUM acceptable performance
+      // In production, expect significantly higher standards
+      expect(metrics.tpr).toBeGreaterThan(0.65); // At least 65% detection rate (baseline)
+      expect(metrics.fpr).toBeLessThan(0.15); // Less than 15% false positive rate (acceptable)
+      expect(metrics.f1Score).toBeGreaterThan(0.55); // F1 > 0.55 is decent
     });
 
     it('should perform threshold sensitivity analysis', () => {

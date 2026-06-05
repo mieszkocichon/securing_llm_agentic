@@ -3,6 +3,7 @@ import { ToolRegistry } from '../tools/ToolRegistry';
 import { PromptInjectionDetector } from '../security/PromptInjectionDetector';
 import { ExfiltrationMonitor } from '../security/ExfiltrationMonitor';
 import { NetworkAnomalyDetector } from '../security/NetworkAnomalyDetector';
+import { RiskAggregator } from '../security/RiskAggregator';
 import { ExecutionTrace, LLMMessage, SecurityPolicy, ToolCall, ThreatDetection, NetworkFlow } from '../types';
 import { HTTPTool } from '../tools/HTTPTool';
 
@@ -21,6 +22,7 @@ export class AgentExecutor {
   private injectionDetector: PromptInjectionDetector;
   private exfiltrationMonitor: ExfiltrationMonitor;
   private networkDetector: NetworkAnomalyDetector;
+  private riskAggregator: RiskAggregator;
   private traces: ExecutionTrace[] = [];
 
   constructor(config: AgentConfig) {
@@ -34,6 +36,7 @@ export class AgentExecutor {
     this.injectionDetector = new PromptInjectionDetector(this.policy);
     this.exfiltrationMonitor = new ExfiltrationMonitor(this.policy);
     this.networkDetector = new NetworkAnomalyDetector();
+    this.riskAggregator = new RiskAggregator();
   }
 
   async execute(userInput: string): Promise<ExecutionTrace> {
@@ -86,26 +89,56 @@ export class AgentExecutor {
       return trace;
     }
 
-    // Phase 3: Tool execution with security monitoring
+    // Phase 3: Tool execution with pre-execution exfiltration screening
+    // ExfiltrationMonitor runs BEFORE each tool executes so blocked calls are prevented.
     trace.toolCalls = await this.executeTools(trace, userInput);
 
-    // Phase 4: Collect all threats from tool calls
-    for (const toolCall of trace.toolCalls) {
-      const toolThreats = this.exfiltrationMonitor.monitor(toolCall);
-      trace.threats.push(...toolThreats);
-    }
+    // Phase 4: Collect application-layer threats (injection + exfiltration)
+    // These were already gathered during Phases 1 and 3 into trace.threats.
 
-    // Phase 5: Network anomaly detection
-    // Collect network flows from HTTPTool and analyze
+    // Phase 5: Network anomaly detection (infrastructure layer)
+    // Collect network flows from HTTPTool and analyze.
+    // After consuming flows we clear BOTH the HTTPTool buffer and the detector's
+    // internal state so that flows from this execution do not pollute subsequent ones.
+    // Without clearing, accumulated flows across many executions would falsely trigger
+    // port-scan (>50 flows), beaconing, or brute-force alerts due to benign aggregate counts.
     const httpTool = this.toolRegistry.get('http') as HTTPTool | undefined;
     if (httpTool) {
       const networkFlows = httpTool.getNetworkFlows();
       if (networkFlows.length > 0) {
         this.networkDetector.addFlows(networkFlows);
       }
+      httpTool.clearNetworkFlows(); // prevent cross-execution accumulation
     }
     const networkThreats = this.networkDetector.detect();
+    this.networkDetector.clearFlows(); // reset detector state for next execution
     trace.threats.push(...networkThreats);
+
+    // Phase 6: Risk aggregation — combine application and infrastructure signals
+    // using the product-of-complements formula R = 1 - (1 - r_A)(1 - d·r_I)
+    // Separate by source (not by type) to avoid double-counting:
+    // networkThreats may include type='data_exfiltration' (from detectExfiltrationByVolume)
+    // which would otherwise appear in both lists if filtered by type.
+    const infrastructureThreats = networkThreats; // ALL threats from networkDetector
+    const applicationThreats = trace.threats.filter((t) => !networkThreats.includes(t));
+    const riskScore = this.riskAggregator.aggregate(applicationThreats, infrastructureThreats);
+
+    if (riskScore.recommendation === 'block') {
+      trace.securityViolations.push({
+        type: 'risk_threshold_exceeded',
+        message: `Blocked by risk aggregator: overall risk score ${riskScore.overallScore} ≥ τ_B (0.85)`,
+        blocked: true,
+        timestamp: new Date()
+      });
+    } else if (riskScore.recommendation === 'review') {
+      // Route to human review; execution already completed but response should be flagged
+      trace.securityViolations.push({
+        type: 'risk_review_required',
+        message: `Flagged for human review: overall risk score ${riskScore.overallScore} in REVIEW band [0.65, 0.85)`,
+        blocked: false,
+        timestamp: new Date()
+      });
+    }
 
     this.traces.push(trace);
     return trace;
@@ -148,6 +181,26 @@ export class AgentExecutor {
         params: mockParams,
         timestamp: new Date()
       };
+
+      // PRE-EXECUTION: ExfiltrationMonitor screens the call BEFORE the tool runs.
+      // This is the correct order — paper §4: "a call is blocked if..."
+      const exfilThreats = this.exfiltrationMonitor.monitor(toolCall);
+      trace.threats.push(...exfilThreats);
+
+      const criticalExfil = exfilThreats.filter(
+        (t) => t.severity === 'critical' || t.severity === 'high'
+      );
+      if (criticalExfil.length > 0) {
+        trace.securityViolations.push({
+          type: 'exfiltration_blocked',
+          message: `Tool call '${toolName}' blocked before execution: ${criticalExfil.map((t) => t.message).join('; ')}`,
+          blocked: true,
+          timestamp: new Date()
+        });
+        // Skip tool execution — call is blocked
+        toolCalls.push(toolCall);
+        continue;
+      }
 
       try {
         const result = await this.toolRegistry.executeTool(toolName, mockParams);

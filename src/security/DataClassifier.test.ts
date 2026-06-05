@@ -33,9 +33,10 @@ describe('DataClassifier', () => {
       expect(result.types).toContain('api_key');
     });
 
-    it('should return LOW sensitivity for api_key alone', () => {
-      const result = classifier.classify('api_key_1234567890abcdefghijk');
-      expect(result.sensitivityLabel).toBe('LOW');
+    it('should return HIGH sensitivity for api_key alone', () => {
+      // api_key is a credential — exfiltration must be blocked; sensitivity is HIGH
+      const result = classifier.classify('sk-1234567890abcdefghijklmnopqrstu');
+      expect(result.sensitivityLabel).toBe('HIGH');
     });
   });
 
@@ -224,9 +225,10 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7
       expect(result.sensitivityLabel).toBe('MEDIUM');
     });
 
-    it('should return LOW for API key alone', () => {
-      const result = classifier.classify('api_key_abc123def');
-      expect(result.sensitivityLabel).toBe('LOW');
+    it('should return HIGH for API key alone', () => {
+      // api_key is now classified as HIGH to ensure ExfiltrationMonitor blocks it
+      const result = classifier.classify('sk-abcdefghijklmnopqrstuvwxyz123456');
+      expect(result.sensitivityLabel).toBe('HIGH');
     });
   });
 });
